@@ -10,6 +10,8 @@ Jogo de navegador em **Blazor Web App (.NET 8, Interactive Server)** que consome
 Os componentes rodam no servidor, então as chamadas HTTP saem do servidor ASP.NET (a API não habilita CORS
 para chamadas feitas direto do navegador).
 
+**🎮 Jogar online:** https://domino-ponta-de-quina.onrender.com
+
 ## Como rodar
 ```bash
 cd DominoQuina
