@@ -1,0 +1,45 @@
+@inherits LayoutComponentBase
+@implements IAsyncDisposable
+
+<canvas class="fundo" @ref="fundo" aria-hidden="true"></canvas>
+
+<header class="topo">
+    <a href="/" class="marca"><span class="logo"><i></i><i></i></span>Ponta de Quina</a>
+    <nav>
+        <NavLink href="/" Match="NavLinkMatch.All">Conta</NavLink>
+        <NavLink href="/jogadores">Jogadores</NavLink>
+        <NavLink href="/lobby">Lobby</NavLink>
+    </nav>
+</header>
+
+<main class="conteudo">@Body</main>
+
+<footer class="rodape">CP6 C# · Ricardo Fernandes de Aquino (RM554597) · Khadija do Rocio Vieira de Lima (RM558971)</footer>
+
+<div id="blazor-error-ui">
+    Ocorreu um erro inesperado.
+    <a href="" class="reload">Recarregar</a>
+    <a class="dismiss">🗙</a>
+</div>
+
+@code {
+    ElementReference fundo;
+    IJSObjectReference? modulo, anim;
+
+    protected override async Task OnAfterRenderAsync(bool primeiro)
+    {
+        if (!primeiro) return;
+        modulo = await JS.InvokeAsync<IJSObjectReference>("import", "./mesa.js");
+        anim = await modulo.InvokeAsync<IJSObjectReference>("criarFundo", fundo);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            if (anim is not null) { await anim.InvokeVoidAsync("destruir"); await anim.DisposeAsync(); }
+            if (modulo is not null) await modulo.DisposeAsync();
+        }
+        catch (JSDisconnectedException) { }
+    }
+}

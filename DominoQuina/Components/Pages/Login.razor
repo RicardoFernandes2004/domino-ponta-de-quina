@@ -1,0 +1,97 @@
+@page "/"
+
+<section class="hero">
+    <p class="sobretitulo">Dominó · 2 jogadores</p>
+    <h1>Ponta de <em>Quina</em></h1>
+    <p class="lead">Encaixe as pedras, faça a soma das pontas virar múltiplo de 5 e marque pontos.</p>
+</section>
+
+@if (usuario is not null)
+{
+    <section class="cartao centro">
+        <p>Conectado como <b>@usuario</b></p>
+        <div class="linha">
+            <button @onclick='() => Nav.NavigateTo("/jogadores")'>Escolher jogador →</button>
+            <button class="secundario" @onclick="Sair">Sair deste navegador</button>
+            <button class="perigo" @onclick="Revogar">Revogar token</button>
+        </div>
+    </section>
+}
+else
+{
+    <div class="grade-2">
+        <section class="cartao">
+            <span class="passo">1</span>
+            <h2>Receber token</h2>
+            <p class="dica">Informe seu e-mail FIAP; o token chega por e-mail (até 5 pedidos a cada 10 min).</p>
+            <form @onsubmit="Solicitar">
+                <input type="email" required placeholder="rm000000@fiap.com.br" @bind="email" />
+                <button disabled="@ocupado">Enviar</button>
+            </form>
+        </section>
+
+        <section class="cartao">
+            <span class="passo">2</span>
+            <h2>Entrar</h2>
+            <p class="dica">Cole aqui o token recebido.</p>
+            <form @onsubmit="Entrar">
+                <input required placeholder="Token" @bind="token" />
+                <button disabled="@ocupado">Entrar</button>
+            </form>
+        </section>
+    </div>
+}
+
+@if (mensagem is not null) { <p class="aviso">@mensagem</p> }
+
+@code {
+    string? email, token, usuario, mensagem;
+    bool ocupado;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await S.CarregarAsync();
+        if (S.Token is not null) await Validar();
+    }
+
+    async Task Solicitar() => await Rodar(async () =>
+    {
+        await Api.SolicitarTokenAsync(email!.Trim());
+        mensagem = "Pedido enviado. Se o e-mail for elegível, o token chegará em instantes.";
+    });
+
+    async Task Entrar() => await Rodar(async () =>
+    {
+        await S.DefinirTokenAsync(token!.Trim());
+        await Validar();
+        if (usuario is not null) Nav.NavigateTo("/jogadores");
+    });
+
+    async Task Validar()
+    {
+        try { usuario = (await Api.SessaoAsync())?.UsuarioId; }
+        catch (ApiException e) { mensagem = e.Message; usuario = null; await S.DefinirTokenAsync(null); }
+    }
+
+    async Task Sair()
+    {
+        await S.DefinirTokenAsync(null);
+        usuario = null;
+        mensagem = "Token removido deste navegador (continua válido).";
+    }
+
+    async Task Revogar() => await Rodar(async () =>
+    {
+        await Api.RevogarTokenAsync();
+        await Sair();
+        mensagem = "Token revogado.";
+    });
+
+    async Task Rodar(Func<Task> acao)
+    {
+        ocupado = true; mensagem = null;
+        try { await acao(); }
+        catch (ApiException e) { mensagem = e.Message; }
+        finally { ocupado = false; }
+    }
+}

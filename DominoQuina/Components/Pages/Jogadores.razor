@@ -1,0 +1,93 @@
+@page "/jogadores"
+@using System.Security.Cryptography
+
+<h1>Jogadores</h1>
+<p class="lead">Ative um jogador neste navegador para jogar com ele. Para jogar sozinho, crie dois e use uma aba para cada.</p>
+
+<section class="cartao">
+    <form @onsubmit="Criar">
+        <input required maxlength="150" placeholder="Nome do novo jogador" @bind="nome" />
+        <button disabled="@ocupado">Criar jogador</button>
+    </form>
+</section>
+
+@if (mensagem is not null) { <p class="aviso">@mensagem</p> }
+
+@if (jogadores is null) { <p class="dica">Carregando…</p> }
+else if (jogadores.Count == 0) { <p class="dica">Nenhum jogador ainda.</p> }
+else
+{
+    <div class="grade-cartoes">
+        @foreach (var j in jogadores)
+        {
+            var minhaChave = S.Chave(j.JogadorId) is not null;
+            <article class="cartao jogador-cartao @(S.JogadorId == j.JogadorId ? "atual" : "")">
+                <span class="avatar">@Inicial(j.Nome)</span>
+                <h3>@j.Nome</h3>
+                <span class="chip @(!j.Ativo ? "livre" : minhaChave ? "meu" : "outro")">
+                    @(!j.Ativo ? "Livre" : minhaChave ? "Ativo aqui" : "Ativo em outro cliente")
+                </span>
+                <div class="linha">
+                    @if (!j.Ativo)
+                    {
+                        <button disabled="@ocupado" @onclick="() => Ativar(j)">Ativar</button>
+                    }
+                    else if (minhaChave)
+                    {
+                        <button disabled="@ocupado" @onclick="() => Selecionar(j)">Jogar</button>
+                        <button class="secundario" disabled="@ocupado" @onclick="() => Liberar(j)">Liberar</button>
+                    }
+                </div>
+            </article>
+        }
+    </div>
+}
+
+@code {
+    List<PerfilJogador>? jogadores;
+    string? nome, mensagem;
+    bool ocupado;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await S.CarregarAsync();
+        if (S.Token is null) { Nav.NavigateTo("/"); return; }
+        await Rodar(Recarregar);
+    }
+
+    async Task Recarregar() => jogadores = await Api.JogadoresAsync() ?? [];
+
+    Task Criar() => Rodar(async () => { await Api.CriarJogadorAsync(nome!.Trim()); nome = null; await Recarregar(); });
+
+    Task Ativar(PerfilJogador j) => Rodar(async () =>
+    {
+        // Chave guardada ANTES do envio: se a resposta se perder, a mesma chave repete a ativação.
+        var chave = RandomNumberGenerator.GetHexString(64, lowercase: true);
+        await S.GuardarChaveAsync(j.JogadorId, chave);
+        await Api.AtivarAsync(j.JogadorId, chave);
+        await Recarregar();
+    });
+
+    Task Liberar(PerfilJogador j) => Rodar(async () =>
+    {
+        await Api.LiberarAsync(j.JogadorId);
+        await S.RemoverChaveAsync(j.JogadorId);
+        await Recarregar();
+    });
+
+    async Task Selecionar(PerfilJogador j)
+    {
+        await S.SelecionarAsync(j.JogadorId, j.Nome);
+        Nav.NavigateTo("/lobby");
+    }
+
+    static string Inicial(string? n) => string.IsNullOrWhiteSpace(n) ? "?" : n.Trim()[..1].ToUpper();
+
+    async Task Rodar(Func<Task> acao)
+    {
+        ocupado = true; mensagem = null;
+        try { await acao(); }
+        catch (ApiException e) { mensagem = e.Message; }
+        finally { ocupado = false; }
+    }
+}

@@ -1,0 +1,209 @@
+@page "/partida/{Id:guid}"
+@implements IAsyncDisposable
+
+<div class="hud">
+    <Placa P="Adversario" Vez="@(estado?.Situacao == Situacao.EmAndamento && !MinhaVez)" Rotulo="Adversário" />
+    <div class="hud-centro">
+        <span class="sobretitulo">@(estado is null ? "" : estado.Situacao == Situacao.EmAndamento ? $"Rodada {estado.NumeroRodada}" : estado.Situacao == Situacao.Aguardando ? "Aguardando início" : "Fim de jogo")</span>
+        <button class="link" title="Copiar ID da partida" @onclick="CopiarId">#@Id.ToString()[..8] ⧉</button>
+    </div>
+    <Placa P="Eu" Vez="@(estado?.Situacao == Situacao.EmAndamento && MinhaVez)" Rotulo="Você" />
+</div>
+
+<div class="mesa-wrap">
+    <canvas @ref="canvas"></canvas>
+
+    @if (estado is null && mensagem is null)
+    {
+        <div class="sobreposicao"><p class="dica">Embaralhando…</p></div>
+    }
+    else if (estado?.Situacao == Situacao.Aguardando)
+    {
+        <div class="sobreposicao">
+            <div class="painel">
+                @if ((estado.Participantes?.Count ?? 0) < 2)
+                {
+                    <h2>Aguardando adversário</h2>
+                    <p class="dica">Ele entra pelo lobby ou pelo ID da partida.</p>
+                    <button class="secundario" @onclick="CopiarId">Copiar ID</button>
+                }
+                else
+                {
+                    <h2>Mesa completa</h2>
+                    <p class="dica">@string.Join(" × ", estado.Participantes!.Select(p => p.Nome))</p>
+                    <button disabled="@ocupado" @onclick='() => Agir("iniciar")'>Embaralhar e iniciar</button>
+                }
+            </div>
+        </div>
+    }
+    else if (estado?.Situacao == Situacao.Encerrada)
+    {
+        <div class="sobreposicao">
+            <div class="painel fim">
+                <h2>@(estado.VencedorId == S.JogadorId ? "Vitória!" : $"{Nome(estado.VencedorId)} venceu")</h2>
+                <p class="placar-final">@(Eu?.Pontuacao ?? 0) <span>×</span> @(Adversario?.Pontuacao ?? 0)</p>
+                @if (resultado?.Eventos is { Count: > 0 } eventos)
+                {
+                    <details>
+                        <summary>Histórico (@eventos.Count lances)</summary>
+                        <ol class="historico">
+                            @foreach (var e in eventos)
+                            {
+                                <li>
+                                    <b>@Nome(e.JogadorId)</b>
+                                    @if (e.PecaJogada is { } pj) { <span> jogou @pj.ValorA|@pj.ValorB na @(e.Lado == 0 ? "esquerda" : "direita")</span> }
+                                    else if (e.PassouVez) { <span> passou a vez</span> }
+                                    @if (e.PontosConcedidos > 0) { <span class="ganho"> +@e.PontosConcedidos</span> }
+                                </li>
+                            }
+                        </ol>
+                    </details>
+                }
+                <button @onclick='() => Nav.NavigateTo("/lobby")'>Voltar ao lobby</button>
+            </div>
+        </div>
+    }
+</div>
+
+@if (estado?.Situacao == Situacao.EmAndamento)
+{
+    <div class="acoes-jogo">
+        <button class="secundario" disabled="@(!MinhaVez || ocupado)" @onclick='() => Agir("comprar")'>Comprar</button>
+        <button class="secundario" disabled="@(!MinhaVez || ocupado)" @onclick='() => Agir("passar")'>Passar a vez</button>
+        <span class="dica">Arraste a pedra até uma ponta, ou clique duas vezes nela.</span>
+    </div>
+}
+
+@if (mensagem is not null)
+{
+    <div class="toast" @key="mensagemId" @onclick="() => mensagem = null">@mensagem</div>
+}
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+
+    EstadoPartida? estado;
+    Resultado? resultado;
+    string? mensagem;
+    int mensagemId;
+    bool ocupado;
+    long enviado = -1;
+    readonly CancellationTokenSource cts = new();
+
+    ElementReference canvas;
+    IJSObjectReference? modulo, mesa;
+    DotNetObjectReference<Partida>? self;
+
+    Participante? Eu => estado?.Participantes?.FirstOrDefault(p => p.JogadorId == S.JogadorId);
+    Participante? Adversario => estado?.Participantes?.FirstOrDefault(p => p.JogadorId != S.JogadorId);
+    bool MinhaVez => estado?.JogadorDoTurnoId == S.JogadorId;
+    string Nome(Guid? id) => estado?.Participantes?.FirstOrDefault(p => p.JogadorId == id)?.Nome ?? "—";
+
+    void Avisar(string? m) { mensagem = m; mensagemId++; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await S.CarregarAsync();
+        if (S.Token is null) { Nav.NavigateTo("/"); return; }
+        if (S.JogadorId is null) { Nav.NavigateTo("/jogadores"); return; }
+        try { await Aplicar(await Api.EstadoAsync(Id)); }
+        catch (ApiException e) { Avisar(e.Message); return; }
+        await S.LembrarPartidaAsync(Id);
+        _ = Acompanhar();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool primeiro)
+    {
+        if (primeiro)
+        {
+            self = DotNetObjectReference.Create(this);
+            modulo = await JS.InvokeAsync<IJSObjectReference>("import", "./mesa.js");
+            mesa = await modulo.InvokeAsync<IJSObjectReference>("criarMesa", canvas, self);
+        }
+        if (mesa is not null && estado is not null && estado.VersaoEstado != enviado)
+        {
+            enviado = estado.VersaoEstado;
+            await mesa.InvokeVoidAsync("atualizar", new
+            {
+                tabuleiro = estado.Tabuleiro ?? [],
+                mao = estado.MinhaMao ?? [],
+                oponente = Adversario?.QuantidadePedrasNaMao ?? 0,
+                minhaVez = MinhaVez,
+                situacao = estado.Situacao,
+                abertura = estado.PedraAberturaObrigatoria,
+                eu = Eu?.Pontuacao ?? 0,
+                adv = Adversario?.Pontuacao ?? 0,
+                venci = estado.Situacao == Situacao.Encerrada && estado.VencedorId == S.JogadorId,
+            });
+        }
+    }
+
+    // Chamados pelo canvas.
+    [JSInvokable] public Task Jogar(int a, int b, int lado) => Agir("jogar", new Peca(a, b), lado);
+    [JSInvokable] public Task Comprar() => Agir("comprar");
+
+    // Polling recomendado pela API: 204 quando nada mudou desde a versão conhecida.
+    async Task Acompanhar()
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1.5));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(cts.Token))
+            {
+                if (ocupado || estado is null) continue;
+                try
+                {
+                    if (await Api.AtualizacoesAsync(Id, estado.VersaoEstado) is { } novo)
+                        await InvokeAsync(async () => { await Aplicar(novo); StateHasChanged(); });
+                }
+                catch (Exception e) when (e is ApiException or HttpRequestException)
+                {
+                    await InvokeAsync(() => { Avisar(e.Message); StateHasChanged(); });
+                }
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    async Task Aplicar(EstadoPartida novo)
+    {
+        estado = novo;
+        if (novo.Situacao == Situacao.Encerrada && resultado is null)
+        {
+            try { resultado = await Api.ResultadoAsync(Id); } catch (ApiException) { }
+        }
+    }
+
+    async Task Agir(string acao, Peca? peca = null, int lado = 0)
+    {
+        if (estado is null || ocupado) return;
+        ocupado = true; mensagem = null;
+        try { await Aplicar(await Api.AgirAsync(Id, acao, estado.VersaoEstado, peca, lado)); }
+        catch (ApiException e)
+        {
+            Avisar(e.Message);
+            if (acao == "jogar" && mesa is not null) await mesa.InvokeVoidAsync("recusar");
+            if (e.EstadoAutoritativo is { } atual) await Aplicar(atual);
+        }
+        finally { ocupado = false; StateHasChanged(); }
+    }
+
+    async Task CopiarId()
+    {
+        if (modulo is null) return;
+        try { await modulo.InvokeVoidAsync("copiar", Id.ToString()); Avisar("ID copiado!"); }
+        catch (JSException) { Avisar(Id.ToString()); }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        cts.Cancel(); cts.Dispose();
+        try
+        {
+            if (mesa is not null) { await mesa.InvokeVoidAsync("destruir"); await mesa.DisposeAsync(); }
+            if (modulo is not null) await modulo.DisposeAsync();
+        }
+        catch (JSDisconnectedException) { }
+        self?.Dispose();
+    }
+}

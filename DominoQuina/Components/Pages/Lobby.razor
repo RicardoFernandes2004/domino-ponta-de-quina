@@ -1,0 +1,104 @@
+@page "/lobby"
+
+<h1>Lobby</h1>
+<p class="lead">Jogando como <b>@S.JogadorNome</b> · <a href="/jogadores">trocar</a></p>
+
+<div class="grade-2">
+    <section class="cartao">
+        <h2>Nova partida</h2>
+        <form @onsubmit="Criar">
+            <label>Pontuação alvo <input type="number" min="5" step="5" required @bind="alvo" /></label>
+            <button disabled="@ocupado">Criar mesa</button>
+        </form>
+    </section>
+    <section class="cartao">
+        <h2>Abrir por ID</h2>
+        <form @onsubmit='() => Nav.NavigateTo($"/partida/{idManual?.Trim()}")'>
+            <input required placeholder="ID da partida" @bind="idManual" />
+            <button class="secundario">Abrir</button>
+        </form>
+    </section>
+</div>
+
+@if (mensagem is not null) { <p class="aviso">@mensagem</p> }
+
+@if (S.Partidas.Count > 0)
+{
+    <div class="titulo-secao"><h2>Suas partidas</h2></div>
+    <div class="grade-cartoes">
+        @foreach (var id in S.Partidas)
+        {
+            <a class="cartao mesa-cartao" href="/partida/@id">
+                <code>#@id.ToString()[..8]</code>
+                <span class="sobretitulo">Voltar à mesa →</span>
+            </a>
+        }
+    </div>
+}
+
+<div class="titulo-secao">
+    <h2>Mesas aguardando adversário</h2>
+    <button class="secundario" disabled="@ocupado" @onclick="() => Rodar(Recarregar)">↻ Atualizar</button>
+</div>
+@if (partidas is null) { <p class="dica">Carregando…</p> }
+else if (partidas.Count == 0) { <p class="dica">Nenhuma mesa aberta. Crie uma!</p> }
+else
+{
+    <div class="grade-cartoes">
+        @foreach (var p in partidas)
+        {
+            <article class="cartao mesa-cartao">
+                <span class="alvo">@p.PontuacaoAlvo<small>pts</small></span>
+                <code>@p.PartidaId.ToString()[..8]</code>
+                <button disabled="@ocupado" @onclick="() => Entrar(p)">Sentar à mesa</button>
+            </article>
+        }
+    </div>
+}
+
+@code {
+    List<PartidaDisponivel>? partidas;
+    int alvo = 50;
+    string? idManual, mensagem;
+    bool ocupado;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await S.CarregarAsync();
+        if (S.Token is null) { Nav.NavigateTo("/"); return; }
+        if (S.JogadorId is null) { Nav.NavigateTo("/jogadores"); return; }
+        await Rodar(Recarregar);
+    }
+
+    async Task Recarregar() => partidas = await Api.PartidasDisponiveisAsync() ?? [];
+
+    Task Criar() => Rodar(async () =>
+    {
+        var estado = await Api.CriarPartidaAsync(alvo);
+        Nav.NavigateTo($"/partida/{estado.PartidaId}");
+    });
+
+    Task Entrar(PartidaDisponivel p) => Rodar(async () =>
+    {
+        try { await Api.AgirAsync(p.PartidaId, "entrar", p.VersaoEstado); }
+        catch (ApiException e) when (e.EstadoAutoritativo is not null)
+        {
+            // Versão desatualizada: tenta uma vez com a versão autoritativa.
+            await Api.AgirAsync(p.PartidaId, "entrar", e.EstadoAutoritativo.VersaoEstado);
+        }
+        Nav.NavigateTo($"/partida/{p.PartidaId}");
+    });
+
+    async Task Rodar(Func<Task> acao)
+    {
+        ocupado = true; mensagem = null;
+        try { await acao(); }
+        catch (ApiException e)
+        {
+            mensagem = e.Codigo == "ESTADO_INVALIDO"
+                ? e.Message + " Este jogador provavelmente já está em outra partida não encerrada: volte a ela em \"Suas partidas\" ou use outro jogador."
+                : e.Message;
+        }
+        finally { ocupado = false; }
+    }
+}

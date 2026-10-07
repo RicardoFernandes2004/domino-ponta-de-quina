@@ -1,0 +1,16 @@
+@* Placa de um jogador no HUD da partida. *@
+<div class="placa @(Vez ? "vez" : "") @(P is null ? "vazia" : "")">
+    <span class="avatar">@(P?.Nome is { Length: > 0 } n ? n[..1].ToUpper() : "?")</span>
+    <div>
+        <small>@Rotulo@(Vez ? " · na vez" : "")</small>
+        <b>@(P?.Nome ?? "—")</b>
+        <small>@(P?.QuantidadePedrasNaMao ?? 0) pedras</small>
+    </div>
+    <span class="pontos">@(P?.Pontuacao ?? 0)</span>
+</div>
+
+@code {
+    [Parameter] public Participante? P { get; set; }
+    [Parameter] public bool Vez { get; set; }
+    [Parameter] public string Rotulo { get; set; } = "";
+}
