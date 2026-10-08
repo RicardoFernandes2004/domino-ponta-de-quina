@@ -1,10 +1,11 @@
 using System.Net;
 using System.Net.Http.Headers;
+using Microsoft.AspNetCore.Components;
 
 namespace DominoQuina;
 
 // Cliente tipado da API Dominó Ponta de Quina. Roda no servidor (Blazor Server), por isso não depende de CORS.
-public class DominoApi(HttpClient http, Sessao s, ILogger<DominoApi> log)
+public class DominoApi(HttpClient http, Sessao s, NavigationManager nav, ILogger<DominoApi> log)
 {
     static readonly System.Text.Json.JsonSerializerOptions Json = new(System.Text.Json.JsonSerializerDefaults.Web);
 
@@ -71,6 +72,13 @@ public class DominoApi(HttpClient http, Sessao s, ILogger<DominoApi> log)
 
         var resp = await http.SendAsync(req);
         if (resp.IsSuccessStatusCode) return resp;
+
+        // 401: token ausente, inválido ou revogado. Esquece o token e volta para a tela de autenticação.
+        if (resp.StatusCode == HttpStatusCode.Unauthorized && s.Token is not null)
+        {
+            await s.DefinirTokenAsync(null);
+            nav.NavigateTo("/");
+        }
 
         var corpoErro = await resp.Content.ReadAsStringAsync();
         log.LogWarning("API {Metodo} {Url} -> {Status}: {Corpo}", m, url, (int)resp.StatusCode, corpoErro);

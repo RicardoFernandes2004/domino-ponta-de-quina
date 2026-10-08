@@ -6,6 +6,16 @@
     <div class="hud-centro">
         <span class="sobretitulo">@(estado is null ? "" : estado.Situacao == Situacao.EmAndamento ? $"Rodada {estado.NumeroRodada}" : estado.Situacao == Situacao.Aguardando ? "Aguardando início" : "Fim de jogo")</span>
         <button class="link" title="Copiar ID da partida" @onclick="CopiarId">#@Id.ToString()[..8] ⧉</button>
+        @if (estado is not null)
+        {
+            <small class="dica">v@(estado.VersaoEstado) · @ProximaAcao</small>
+        }
+        @if (vezDesde is { } desde)
+        {
+            var t = DateTime.UtcNow - desde;
+            var pen = Estrategia.Penalidade(t);
+            <small class="relogio @(pen > 0 ? "atrasado" : "")" title="Regra futura: a API ainda não aplica o desconto">⏱ @((int)t.TotalSeconds)s · desconto −@pen (prévia)</small>
+        }
     </div>
     <Placa P="Eu" Vez="@(estado?.Situacao == Situacao.EmAndamento && MinhaVez)" Rotulo="Você" />
 </div>
@@ -65,12 +75,16 @@
     }
 </div>
 
-@if (estado?.Situacao == Situacao.EmAndamento)
+@if (estado is not null && estado.Situacao != Situacao.Encerrada)
 {
     <div class="acoes-jogo">
-        <button class="secundario" disabled="@(!MinhaVez || ocupado)" @onclick='() => Agir("comprar")'>Comprar</button>
-        <button class="secundario" disabled="@(!MinhaVez || ocupado)" @onclick='() => Agir("passar")'>Passar a vez</button>
-        <span class="dica">Arraste a pedra até uma ponta, ou clique duas vezes nela.</span>
+        @if (estado.Situacao == Situacao.EmAndamento)
+        {
+            <button class="secundario" disabled="@(!MinhaVez || ocupado || autonomo)" @onclick='() => Agir("comprar")'>Comprar</button>
+            <button class="secundario" disabled="@(!MinhaVez || ocupado || autonomo)" @onclick='() => Agir("passar")'>Passar a vez</button>
+            <span class="dica">Arraste a pedra até uma ponta, ou clique duas vezes nela.</span>
+        }
+        <label class="dica"><input type="checkbox" @bind="autonomo" /> 🤖 Jogador autônomo</label>
     </div>
 }
 
@@ -86,8 +100,9 @@
     Resultado? resultado;
     string? mensagem;
     int mensagemId;
-    bool ocupado;
-    long enviado = -1;
+    bool ocupado, autonomo;
+    long enviado = -1, falhouEm = -1;
+    DateTime? vezDesde; // início da minha vez, para o relógio de penalidade
     readonly CancellationTokenSource cts = new();
 
     ElementReference canvas;
@@ -97,6 +112,9 @@
     Participante? Eu => estado?.Participantes?.FirstOrDefault(p => p.JogadorId == S.JogadorId);
     Participante? Adversario => estado?.Participantes?.FirstOrDefault(p => p.JogadorId != S.JogadorId);
     bool MinhaVez => estado?.JogadorDoTurnoId == S.JogadorId;
+    // Rótulos de ProximaAcaoPartida (a swagger só traz 0–5; ordem do slide 15 do enunciado).
+    static readonly string[] Acoes = ["Aguardar", "Jogar abertura", "Jogar", "Comprar", "Passar", "Encerrar"];
+    string ProximaAcao => estado is null ? "" : estado.ProximaAcao is >= 0 and < 6 ? Acoes[estado.ProximaAcao] : $"Ação {estado.ProximaAcao}";
     string Nome(Guid? id) => estado?.Participantes?.FirstOrDefault(p => p.JogadorId == id)?.Nome ?? "—";
 
     void Avisar(string? m) { mensagem = m; mensagemId++; }
@@ -160,6 +178,8 @@
                 {
                     await InvokeAsync(() => { Avisar(e.Message); StateHasChanged(); });
                 }
+                if (autonomo) await InvokeAsync(JogarSozinho);
+                else if (vezDesde is not null) await InvokeAsync(StateHasChanged); // relógio
             }
         }
         catch (OperationCanceledException) { }
@@ -167,23 +187,45 @@
 
     async Task Aplicar(EstadoPartida novo)
     {
+        if (estado is not null && novo.VersaoEstado < estado.VersaoEstado) return; // só versões mais novas
+        var eraMinhaVez = vezDesde is not null;
         estado = novo;
+        var minhaVez = MinhaVez && novo.Situacao == Situacao.EmAndamento;
+        if (!minhaVez) vezDesde = null;
+        else if (!eraMinhaVez) vezDesde = DateTime.UtcNow;
         if (novo.Situacao == Situacao.Encerrada && resultado is null)
         {
             try { resultado = await Api.ResultadoAsync(Id); } catch (ApiException) { }
         }
     }
 
-    async Task Agir(string acao, Peca? peca = null, int lado = 0)
+    // Jogador autônomo: no máximo um lance por tick, sempre decidido a partir do estado confirmado.
+    async Task JogarSozinho()
     {
-        if (estado is null || ocupado) return;
+        if (!autonomo || ocupado || estado is null) return;
+        if (estado.Situacao == Situacao.Aguardando && estado.Participantes?.Count == 2) { await Agir("iniciar"); return; }
+        if (estado.Situacao != Situacao.EmAndamento || !MinhaVez) return;
+
+        // Se o lance escolhido já foi rejeitado nesta versão, tenta comprar; se nem comprar der, passa.
+        var versao = estado.VersaoEstado;
+        var d = falhouEm == versao ? new Decisao("comprar") : Estrategia.Decidir(estado);
+        if (await Agir(d.Acao, d.Peca, d.Lado)) return;
+        if (d.Acao == "comprar") await Agir("passar");
+        else falhouEm = versao;
+    }
+
+    // true = a API confirmou a ação.
+    async Task<bool> Agir(string acao, Peca? peca = null, int lado = 0)
+    {
+        if (estado is null || ocupado) return false;
         ocupado = true; mensagem = null;
-        try { await Aplicar(await Api.AgirAsync(Id, acao, estado.VersaoEstado, peca, lado)); }
+        try { await Aplicar(await Api.AgirAsync(Id, acao, estado.VersaoEstado, peca, lado)); return true; }
         catch (ApiException e)
         {
             Avisar(e.Message);
             if (acao == "jogar" && mesa is not null) await mesa.InvokeVoidAsync("recusar");
             if (e.EstadoAutoritativo is { } atual) await Aplicar(atual);
+            return false;
         }
         finally { ocupado = false; StateHasChanged(); }
     }

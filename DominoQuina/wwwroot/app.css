@@ -146,3 +146,6 @@ summary { cursor: pointer; color: var(--suave); }
                    position: fixed; width: 100%; z-index: 1000; }
 #blazor-error-ui .dismiss { cursor: pointer; position: absolute; right: .75rem; top: .5rem; }
 .mesa-cartao { text-decoration: none; color: inherit; }
+
+.relogio { font-variant-numeric: tabular-nums; color: var(--suave); font-size: .8rem; }
+.relogio.atrasado { color: var(--ouro); }
