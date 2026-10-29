@@ -5,7 +5,7 @@
 - Khadija do Rocio Vieira de Lima — RM558971
 
 Jogo de navegador em **Blazor Web App (.NET 8, Interactive Server)** que consome a API
-[Dominó Ponta de Quina](https://domino-quina-atbkg6ckcwbpd5gz.westus3-01.azurewebsites.net/swagger).
+[Dominó Ponta de Quina](https://domino-quina-api-b1-pf2261.azurewebsites.net/swagger).
 
 Os componentes rodam no servidor, então as chamadas HTTP saem do servidor ASP.NET (a API não habilita CORS
 para chamadas feitas direto do navegador).
