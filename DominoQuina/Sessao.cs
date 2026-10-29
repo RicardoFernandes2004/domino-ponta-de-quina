@@ -22,13 +22,20 @@ public class Sessao(IJSRuntime js)
 
     public async Task CarregarAsync()
     {
+        await RelerCompartilhadoAsync();
         if (carregado) return;
         carregado = true;
         Token = await Ler<string>(local, "token");
-        chaves = await Ler<Dictionary<Guid, string>>(local, "chaves") ?? [];
-        partidas = await Ler<Dictionary<Guid, List<Guid>>>(local, "partidas") ?? [];
         JogadorId = await Ler<Guid?>(aba, "jogadorId");
         JogadorNome = await Ler<string>(aba, "jogadorNome");
+    }
+
+    // chaves e partidas são compartilhadas entre abas: relê antes de usar/gravar,
+    // senão uma aba sobrescreve o que outra salvou e a chave de um jogador ativo se perde de vez.
+    async Task RelerCompartilhadoAsync()
+    {
+        chaves = await Ler<Dictionary<Guid, string>>(local, "chaves") ?? [];
+        partidas = await Ler<Dictionary<Guid, List<Guid>>>(local, "partidas") ?? [];
     }
 
     public string? Chave(Guid jogadorId) => chaves.GetValueOrDefault(jogadorId);
@@ -39,6 +46,7 @@ public class Sessao(IJSRuntime js)
     public async Task LembrarPartidaAsync(Guid partidaId)
     {
         if (JogadorId is not { } j) return;
+        await RelerCompartilhadoAsync();
         var lista = partidas.GetValueOrDefault(j) ?? [];
         if (lista.FirstOrDefault() == partidaId) return;
         lista.Remove(partidaId);
@@ -56,12 +64,14 @@ public class Sessao(IJSRuntime js)
 
     public async Task GuardarChaveAsync(Guid jogadorId, string chave)
     {
+        await RelerCompartilhadoAsync();
         chaves[jogadorId] = chave;
         await local.SetAsync("chaves", chaves);
     }
 
     public async Task RemoverChaveAsync(Guid jogadorId)
     {
+        await RelerCompartilhadoAsync();
         chaves.Remove(jogadorId);
         await local.SetAsync("chaves", chaves);
         if (JogadorId == jogadorId) await SelecionarAsync(null, null);
